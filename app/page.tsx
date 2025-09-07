@@ -15,6 +15,7 @@ export default function Home() {
   const [charged, setCharged] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [accepted, setAccepted] = useState<Set<number>>(new Set())
+  const [suggestTried, setSuggestTried] = useState(false)
 
   async function chargeOnce() {
     const supa = getSupabase()
@@ -97,6 +98,7 @@ export default function Home() {
       const { suggestions } = await res.json()
       setSuggestions(suggestions || [])
       setAccepted(new Set())
+      setSuggestTried(true)
     } catch (e: any) {
       setError(e?.name === 'AbortError' ? 'Suggestions timed out. Try again.' : (e?.message || 'Suggestion failed'))
     } finally { setLoading(false) }
@@ -186,6 +188,9 @@ export default function Home() {
               <button onClick={()=>download('srt')} disabled={!text} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5">Download SRT</button>
               <button onClick={()=>download('vtt')} disabled={!text} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5">Download VTT</button>
             </div>
+            {suggestTried && suggestions.length === 0 && !error && (
+              <p className="mt-3 text-sm text-white/60">No obvious suggestions for this text. For deeper edits enable OPENAI_API_KEY, or try text with common mistakes.</p>
+            )}
           </div>
         </div>
 
@@ -207,12 +212,12 @@ export default function Home() {
                         type="button"
                         onClick={()=> setAccepted(prev => new Set(prev).add(i))}
                         className={`rounded-md px-3 py-1 border ${accepted.has(i) ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200' : 'border-white/20 hover:bg-white/5'}`}
-                      >صح ✓</button>
+                      >Accept ✓</button>
                       <button
                         type="button"
                         onClick={()=> setAccepted(prev => { const n = new Set(prev); n.delete(i); return n })}
                         className={`rounded-md px-3 py-1 border ${!accepted.has(i) ? 'bg-red-500/20 border-red-400 text-red-200' : 'border-white/20 hover:bg-white/5'}`}
-                      >خطأ ✗</button>
+                      >Reject ✗</button>
                     </div>
                   </li>
                 ))}
