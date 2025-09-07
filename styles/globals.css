@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { color-scheme: dark light; }
+
+:root {
+  --bg: #ffffff;
+  --fg: #0b0f14;
+}
+
+.dark {
+  --bg: #0b0f14;
+  --fg: #e6f1ff;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.beams {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(600px 200px at 80% -20%, rgba(15,147,255,0.25), transparent),
+              radial-gradient(400px 160px at 10% 0%, rgba(83,255,233,0.15), transparent),
+              radial-gradient(800px 240px at 50% 120%, rgba(15,147,255,0.2), transparent);
+  filter: blur(10px);
+}
+
+.glass {
+  @apply bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/10 shadow-xl;
+}
+

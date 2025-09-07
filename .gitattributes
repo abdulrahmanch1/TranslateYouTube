@@ -1,0 +1,18 @@
+* text=auto eol=lf
+
+# Treat common files as text
+*.ts text
+*.tsx text
+*.js text
+*.jsx text
+*.css text
+*.scss text
+*.md text
+*.json text
+*.sql text
+*.yml text
+*.yaml text
+
+# Keep shell scripts with LF
+*.sh text eol=lf
+
