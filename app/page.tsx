@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getSupabase } from '@/lib/supabaseClient'
 import { toSRT, toVTT } from '@/lib/srt'
+import { User } from '@supabase/supabase-js'
 
 type Suggestion = { start: number; end: number; original: string; replacement: string; reason?: string }
 
@@ -16,23 +17,51 @@ export default function Home() {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [accepted, setAccepted] = useState<Set<number>>(new Set())
   const [suggestTried, setSuggestTried] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+  const [supabaseSessionLoaded, setSupabaseSessionLoaded] = useState(false)
+
+  useEffect(() => {
+    setLoading(false) // Ensure loading is false on mount
+    setText('') // Reset text on mount
+    setCues(null) // Reset cues on mount
+    setSuggestions([]) // Reset suggestions on mount
+    setCharged(false) // Reset charged on mount
+    setSuggestTried(false) // Reset suggestTried on mount
+
+    const supa = getSupabase()
+    const { data: { subscription } } = supa.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null)
+      setSupabaseSessionLoaded(true)
+    })
+
+    // Initial check in case onAuthStateChange doesn't fire immediately
+    supa.auth.getUser().then(({ data: { user } }) => {
+      setUser(user || null)
+      setSupabaseSessionLoaded(true)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [])
 
   async function chargeOnce() {
+    console.log('chargeOnce: Starting...')
     const supa = getSupabase()
-    const { data: userRes } = await supa.auth.getUser()
-    if (!userRes.user) throw new Error('Please login to process files')
+    if (!user) throw new Error('Please login to process files')
     // Add a 10s timeout around RPC to avoid hanging UI
     const rpc = (supa as any).rpc('ledger_charge', { amount_cents: 100 })
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Billing timed out')), 10000))
+    console.log('chargeOnce: Attempting RPC call...')
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Billing timed out')), 30000))
     try {
       const res = await Promise.race([rpc, timeout]) as any
+      console.log('chargeOnce: RPC call completed.', res)
       if (res?.error) throw new Error(res.error.message)
       if (res?.data === null) throw new Error('Insufficient balance. Top‑up your wallet.')
       setCharged(true)
     } catch (e:any) {
-      // Soft‑fail: proceed to processing to avoid blocking the user
-      console.warn('Charge failed/timeout; proceeding:', e?.message || e)
-      setCharged(true)
+      console.error('chargeOnce: Charge failed: ' + (e?.message || e))
+      throw e // Re-throw the error to stop processing
     }
   }
 
@@ -40,6 +69,11 @@ export default function Home() {
     e.preventDefault()
     setError(undefined)
     if (!file) { setError('Choose a file first'); return }
+    console.log('onUpload: File selected.')
+    if (!supabaseSessionLoaded) { setError('Loading user session, please wait...'); return }
+    console.log('onUpload: Supabase session loaded.')
+    if (!user) { setError('Please login to process files'); return }
+    console.log('onUpload: User authenticated.')
     setLoading(true)
     try {
       const name = (file.name || '').toLowerCase()
@@ -63,9 +97,7 @@ export default function Home() {
           setText(data.text || '')
           setCues(data.cues || null)
         }
-        if (!charged) chargeOnce().catch(()=>{})
       } else {
-        if (!charged) await chargeOnce()
         const fd = new FormData()
         fd.set('file', file)
         const c = new AbortController()
@@ -79,8 +111,10 @@ export default function Home() {
       }
     } catch (err: any) {
       setError(err?.name === 'AbortError' ? 'Processing timed out. Try a smaller file.' : (err?.message || 'Processing failed'))
+      console.error('onUpload: Error caught: ' + err)
     } finally {
       setLoading(false)
+      console.log('onUpload: Function finished.')
     }
   }
 
@@ -174,7 +208,7 @@ export default function Home() {
         <div className="mt-10 grid md:grid-cols-2 gap-6">
           <form onSubmit={onUpload} className="glass rounded-2xl p-6">
             <label className="block text-sm text-white/70">YouTube file (SRT/VTT/MP3/MP4/WAV)</label>
-            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>setFile(e.target.files?.[0]||null)} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3" />
+            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>{setFile(e.target.files?.[0]||null); setCharged(false)}} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3" />
             <button disabled={loading || !file} className="mt-4 rounded-lg bg-primary-500 hover:bg-primary-400 px-4 py-2">{loading ? 'Processing…' : (charged ? 'Re-process' : 'Process ($1)')}</button>
             {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
             <p className="mt-2 text-xs text-white/50">Balance is charged once per file. Use Wallet to top‑up.</p>

@@ -4,6 +4,7 @@ alter table public.profiles
   add column if not exists balance_cents integer not null default 0;
 
 -- Top-up wallet by amount_cents (positive integer). Returns new balance.
+drop function if exists public.wallet_topup(int);
 create or replace function public.wallet_topup(amount_cents int)
 returns int
 language sql
@@ -17,6 +18,7 @@ as $$
 $$;
 
 -- Charge wallet by amount_cents if sufficient funds. Returns new balance, or NULL if insufficient.
+drop function if exists public.wallet_charge(int);
 create or replace function public.wallet_charge(amount_cents int)
 returns int
 language sql

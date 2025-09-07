@@ -10,11 +10,25 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
--- Allow users to select their own profile
-create policy "Profiles are viewable by owner" on public.profiles
-for select using ( auth.uid() = id );
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='public' and tablename='profiles' and policyname='Profiles are viewable by owner'
+  ) then
+    create policy "Profiles are viewable by owner" on public.profiles
+      for select using ( auth.uid() = id );
+  end if;
+end$$;
 
 -- Allow user to update their own profile (limited — production may restrict columns)
-create policy "Profiles updatable by owner" on public.profiles
-for update using ( auth.uid() = id );
-
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='public' and tablename='profiles' and policyname='Profiles updatable by owner'
+  ) then
+    create policy "Profiles updatable by owner" on public.profiles
+      for update using ( auth.uid() = id );
+  end if;
+end$$;

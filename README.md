@@ -26,10 +26,10 @@ Database
   - supabase/migrations/0005_profiles_fields.sql (adds display_name, accepted_tos_at)
 
 Wallet
-- Each processed file costs $1 (100 cents) deducted from user wallet.
-- Ledger: public.wallet_transactions stores every topup/charge (with running balance_after).
-- RPCs: ledger_balance(), ledger_topup(amount_cents), ledger_charge(amount_cents).
-- UI: /wallet reads ledger_balance and shows recent transactions; dev top‑up calls ledger_topup.
+- Ledger-only: all balances and movements come from `public.wallet_transactions` (running `balance_after`).
+- RPCs: `ledger_balance()`, `ledger_topup(amount_cents)`, `ledger_charge(amount_cents)` — they only write to `wallet_transactions`.
+- UI: `/wallet` computes balance from ledger (RPC or direct), never from `profiles`.
+- Initialization: `ensure_wallet/ensure_wallet_for` inserts a zero `topup` only if no transactions exist for the user.
 
 YouTube Transcript
 - The API fetches timed transcript using the youtube-transcript package and preserves timing while translating line-by-line.

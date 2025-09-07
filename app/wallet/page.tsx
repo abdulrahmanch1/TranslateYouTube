@@ -7,17 +7,53 @@ export default function WalletPage() {
   const [tx, setTx] = useState<Array<{id:string,type:string,amount_cents:number,balance_after:number,created_at:string}>>([])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string|undefined>()
+  const [acct, setAcct] = useState<{ id: string; email: string | null } | null>(null)
+  const [source, setSource] = useState<'server'|'client'|'none'>('none')
 
   async function load() {
     setErr(undefined)
     const supa = getSupabase()
-    const { data: userRes } = await supa.auth.getUser()
-    if (!userRes.user) { setErr('Please login'); return }
-    // Use ledger balance
-    const balRes = await (supa as any).rpc('ledger_balance')
-    if (balRes.error) setErr(balRes.error.message)
-    setBalance(((balRes.data ?? 0) as number) / 100)
-    // Recent transactions (requires RLS select policy)
+    const userStr = localStorage.getItem('sb-user')
+    const user = userStr ? JSON.parse(userStr) : null
+    if (!user) { setErr('Please login'); setAcct(null); setBalance(0); setTx([]); setSource('none'); return }
+    setAcct({ id: user.id, email: user.email ?? null })
+    // Try server summary (service role) first
+    try {
+      const res = await fetch('/api/wallet/summary', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id })
+      })
+      if (res.ok) {
+        const payload = await res.json()
+        setBalance(((Number(payload.balance_cents) || 0) / 100))
+        setTx((payload.transactions || []).map((t:any)=> ({
+          id: t.id, type: t.type, amount_cents: Number(t.amount_cents||0), balance_after: Number(t.balance_after||0), created_at: t.created_at
+        })))
+        setSource('server')
+        return
+      } else {
+        // keep error but fall back to client reads
+        const msg = await res.text()
+        setErr(msg)
+      }
+    } catch (e:any) {
+      setErr(e?.message || 'Server balance unavailable')
+    }
+
+    // Fallback to client-side: ensure, then compute from ledger directly
+    try { await (supa as any).rpc('ensure_profile') } catch {}
+    try { await (supa as any).rpc('ensure_wallet') } catch {}
+    // Balance from last transaction
+    const { data: rows, error: txErr } = await (supa.from('wallet_transactions') as any)
+      .select('balance_after')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (txErr) setErr(txErr.message)
+    const last = Array.isArray(rows) ? rows[0] : rows
+    const cents = Number((last as any)?.balance_after ?? 0) || 0
+    setBalance(cents / 100)
+    setSource('client')
+    // Try fetch last transactions (may be blocked by RLS; ignore errors)
     try {
       const { data: txs } = await (supa.from('wallet_transactions') as any)
         .select('id,type,amount_cents,balance_after,created_at')
@@ -29,17 +65,33 @@ export default function WalletPage() {
     } catch {}
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load() // initial load
+    const supa = getSupabase()
+    const { data: authListener } = supa.auth.onAuthStateChange((event, session) => {
+      // Re-load data on auth changes
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+        load()
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [])
 
   async function devTopup(amount = 500) {
     // Developer helper: add $5
     setLoading(true)
     setErr(undefined)
     const supa = getSupabase()
-    const { error, data } = await (supa as any).rpc('ledger_topup', { amount_cents: amount })
+    const { data: userRes } = await supa.auth.getUser()
+    if (!userRes.user) { setErr('Please login'); setLoading(false); return }
+    const res = await fetch('/api/wallet/topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: userRes.user.id, amount_cents: amount }) })
     setLoading(false)
-    if (error) { setErr(error.message); return }
-    setBalance(((data as number) ?? 0) / 100)
+    if (!res.ok) { setErr(await res.text()); return }
+    const payload = await res.json()
+    setBalance(((Number(payload.balance_cents) ?? 0)) / 100)
     load()
   }
 
@@ -48,8 +100,11 @@ export default function WalletPage() {
       <div className="max-w-md mx-auto glass rounded-2xl p-6">
         <h2 className="text-2xl font-semibold">Wallet</h2>
         <p className="mt-2 text-white/70 text-sm">Each file processing costs $1.</p>
+        {acct && (
+          <p className="mt-1 text-xs text-white/50">Account: {acct.email || 'no-email'} · {acct.id.slice(0,8)}… source: {source}</p>
+        )}
         <div className="mt-4">
-          <div className="text-white/80">Balance: <span className="font-semibold">{balance === null ? '—' : `$${balance.toFixed(2)}`}</span></div>
+          <div className="text-white/80">Balance: <span className="font-semibold">${(balance ?? 0).toFixed(2)}</span></div>
         </div>
         {err && <p className="mt-3 text-sm text-red-300">{err}</p>}
         <div className="mt-6 flex items-center gap-3">

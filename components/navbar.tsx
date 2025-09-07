@@ -10,17 +10,16 @@ export function Navbar() {
   const router = useRouter()
 
   useEffect(() => {
-    let mounted = true
+    // Check for user in localStorage on initial load
+    const user = localStorage.getItem('sb-user')
+    setAuthed(!!user)
+
+    // Listen for auth changes
     const supa = getSupabase()
-    supa.auth.getUser().then(({ data }) => {
-      if (!mounted) return
-      setAuthed(!!data.user)
-    })
     const { data: sub } = supa.auth.onAuthStateChange((_e, session) => {
       setAuthed(!!session?.user)
     })
     return () => {
-      mounted = false
       sub.subscription.unsubscribe()
     }
   }, [])
@@ -28,22 +27,19 @@ export function Navbar() {
   async function logout() {
     if (signingOut) return
     setSigningOut(true)
-    const supa = getSupabase()
-    try {
-      const { error } = await supa.auth.signOut()
-      if (error) {
-        // Even if error, force local UI sign-out to avoid a stuck state
-        console.error('signOut error:', error)
-      }
-    } catch (e) {
-      console.error('signOut exception:', e)
-    } finally {
-      // Proactively update UI and local cache in case the auth event is delayed
-      try { if (typeof window !== 'undefined') localStorage.removeItem('sb-user') } catch {}
-      setAuthed(false)
-      setSigningOut(false)
-      router.replace('/')
-    }
+
+    // Manually clear the Supabase session from localStorage
+    const supaKey = 'sb-isewjhosvqodcxiwpggr-auth-token'
+    localStorage.removeItem(supaKey)
+    
+    // Also remove our custom user object
+    localStorage.removeItem('sb-user')
+    
+    setAuthed(false)
+    setSigningOut(false)
+    
+    // Hard redirect to ensure app state resets
+    window.location.href = '/'
   }
 
   return (
