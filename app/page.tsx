@@ -19,61 +19,94 @@ export default function Home() {
   const [suggestTried, setSuggestTried] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [supabaseSessionLoaded, setSupabaseSessionLoaded] = useState(false)
+  const [billingWarning, setBillingWarning] = useState<string|undefined>()
 
   useEffect(() => {
-    setLoading(false) // Ensure loading is false on mount
-    setText('') // Reset text on mount
-    setCues(null) // Reset cues on mount
-    setSuggestions([]) // Reset suggestions on mount
-    setCharged(false) // Reset charged on mount
-    setSuggestTried(false) // Reset suggestTried on mount
+    // Reset UI state on mount
+    setLoading(false)
+    setText('')
+    setCues(null)
+    setSuggestions([])
+    setCharged(false)
+    setBillingWarning(undefined)
+    setSuggestTried(false)
 
-    const supa = getSupabase()
-    const { data: { subscription } } = supa.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null)
-      setSupabaseSessionLoaded(true)
-    })
+    // Fallback: never block UI longer than 2s waiting on auth
+    const fallback = setTimeout(() => setSupabaseSessionLoaded(true), 2000)
 
-    // Initial check in case onAuthStateChange doesn't fire immediately
-    supa.auth.getUser().then(({ data: { user } }) => {
-      setUser(user || null)
+    let unsubscribe: (() => void) | null = null
+    try {
+      const supa = getSupabase()
+      // Get current session quickly
+      supa.auth.getSession()
+        .then(({ data }) => {
+          setUser(data.session?.user ?? null)
+        })
+        .finally(() => setSupabaseSessionLoaded(true))
+
+      // Keep session in sync
+      const { data: sub } = supa.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null)
+        setSupabaseSessionLoaded(true)
+      })
+      unsubscribe = () => sub.subscription.unsubscribe()
+    } catch {
       setSupabaseSessionLoaded(true)
-    })
+    }
 
     return () => {
-      subscription.unsubscribe()
+      clearTimeout(fallback)
+      if (unsubscribe) unsubscribe()
     }
   }, [])
 
-  async function chargeOnce() {
-    console.log('chargeOnce: Starting...')
-    const supa = getSupabase()
-    if (!user) throw new Error('Please login to process files')
-    // Add a 10s timeout around RPC to avoid hanging UI
-    const rpc = (supa as any).rpc('ledger_charge', { amount_cents: 100 })
-    console.log('chargeOnce: Attempting RPC call...')
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Billing timed out')), 30000))
+  async function chargeOnceNonBlocking() {
+    // Attempt to charge, but do not block processing if billing is slow/unavailable
     try {
-      const res = await Promise.race([rpc, timeout]) as any
-      console.log('chargeOnce: RPC call completed.', res)
-      if (res?.error) throw new Error(res.error.message)
-      if (res?.data === null) throw new Error('Insufficient balance. Top‑up your wallet.')
+      const supa = getSupabase()
+      if (!user) throw new Error('Please login to process files')
+      // Prefer server-side charge to avoid client-side RLS/latency
+      async function attemptServerCharge(timeoutMs = 8000) {
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+        try {
+          const res = await fetch('/api/wallet/charge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user!.id, amount_cents: 100 }),
+            signal: ctrl.signal,
+          })
+          if (!res.ok) throw new Error(await res.text())
+          return await res.json()
+        } finally { clearTimeout(timer) }
+      }
+
+      try {
+        await attemptServerCharge(8000)
+      } catch (firstErr: any) {
+        // Retry quickly once
+        await new Promise(r => setTimeout(r, 400))
+        await attemptServerCharge(6000)
+      }
       setCharged(true)
     } catch (e:any) {
-      console.error('chargeOnce: Charge failed: ' + (e?.message || e))
-      throw e // Re-throw the error to stop processing
+      // Surface as a non-blocking warning; do not fail the processing result or pollute main error state
+      const msg = typeof e?.message === 'string' ? e.message : 'Billing failed; no charge applied.'
+      console.warn('Billing issue (non-blocking):', msg)
+      setBillingWarning(msg)
     }
   }
 
   async function onUpload(e: React.FormEvent) {
     e.preventDefault()
     setError(undefined)
+    setText('')
+    setCues(null)
+    setSuggestions([])
+    setSuggestTried(false)
+
     if (!file) { setError('Choose a file first'); return }
-    console.log('onUpload: File selected.')
-    if (!supabaseSessionLoaded) { setError('Loading user session, please wait...'); return }
-    console.log('onUpload: Supabase session loaded.')
-    if (!user) { setError('Please login to process files'); return }
-    console.log('onUpload: User authenticated.')
+
     setLoading(true)
     try {
       const name = (file.name || '').toLowerCase()
@@ -85,6 +118,7 @@ export default function Home() {
           const parsed = mod.parseCaptionsFromText(file.name, content)
           setText(parsed.text || '')
           setCues(parsed.cues || null)
+          if (!charged) chargeOnceNonBlocking()
         } catch (e) {
           const fd = new FormData()
           fd.set('file', file)
@@ -96,6 +130,7 @@ export default function Home() {
           const data = await res.json()
           setText(data.text || '')
           setCues(data.cues || null)
+          if (!charged) chargeOnceNonBlocking()
         }
       } else {
         const fd = new FormData()
@@ -108,6 +143,7 @@ export default function Home() {
         const data = await res.json()
         setText(data.text || '')
         setCues(data.cues || null)
+        if (!charged) chargeOnceNonBlocking()
       }
     } catch (err: any) {
       setError(err?.name === 'AbortError' ? 'Processing timed out. Try a smaller file.' : (err?.message || 'Processing failed'))
@@ -179,11 +215,19 @@ export default function Home() {
     return parts
   }, [suggestions, text])
 
-  function download(format: 'srt'|'vtt') {
+  async function download(format: 'srt'|'vtt') {
+    setError(undefined)
+    setBillingWarning(undefined)
+    // Require login only at download/charge time
+    if (!user) { setError('Please login to download'); return }
+    // Attempt charge if not yet charged for this file
+    if (!charged) {
+      await chargeOnceNonBlocking()
+      if (!charged) return // stop download if charge failed or timed out
+    }
     // If we have cues, replace cue texts by applying replacements naively by string search
     if (cues && cues.length) {
       const updated = cues.map(c => ({ ...c, text: c.text }))
-      // Simple: do nothing extra since we applied to global text — in MVP keep original timing
       const content = format === 'vtt' ? toVTT(updated) : toSRT(updated)
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
       const a = document.createElement('a')
@@ -208,10 +252,16 @@ export default function Home() {
         <div className="mt-10 grid md:grid-cols-2 gap-6">
           <form onSubmit={onUpload} className="glass rounded-2xl p-6">
             <label className="block text-sm text-white/70">YouTube file (SRT/VTT/MP3/MP4/WAV)</label>
-            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>{setFile(e.target.files?.[0]||null); setCharged(false)}} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3" />
-            <button disabled={loading || !file} className="mt-4 rounded-lg bg-primary-500 hover:bg-primary-400 px-4 py-2">{loading ? 'Processing…' : (charged ? 'Re-process' : 'Process ($1)')}</button>
+            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>{setFile(e.target.files?.[0]||null); setCharged(false); setBillingWarning(undefined)}} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3" />
+            <button
+              disabled={loading || !file}
+              className="mt-4 rounded-lg bg-primary-500 hover:bg-primary-400 px-4 py-2 disabled:opacity-60"
+            >
+              { loading ? 'Processing…' : (!file ? 'Choose a file' : (charged ? 'Re-process' : 'Process ($1)')) }
+            </button>
             {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
             <p className="mt-2 text-xs text-white/50">Balance is charged once per file. Use Wallet to top‑up.</p>
+            {billingWarning && <p className="mt-2 text-xs text-white/60">{billingWarning}</p>}
           </form>
 
           <div className="glass rounded-2xl p-6">

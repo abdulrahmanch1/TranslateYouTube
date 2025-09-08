@@ -27,19 +27,26 @@ export function Navbar() {
   async function logout() {
     if (signingOut) return
     setSigningOut(true)
-
-    // Manually clear the Supabase session from localStorage
-    const supaKey = 'sb-isewjhosvqodcxiwpggr-auth-token'
-    localStorage.removeItem(supaKey)
-    
-    // Also remove our custom user object
-    localStorage.removeItem('sb-user')
-    
-    setAuthed(false)
-    setSigningOut(false)
-    
-    // Hard redirect to ensure app state resets
-    window.location.href = '/'
+    const supa = getSupabase()
+    const ref = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').match(/^https?:\/\/([^.]+)\./)?.[1]
+    const storageKey = ref ? `sb-${ref}-auth-token` : null
+    try {
+      // Sign out with timeout fallback
+      const signOutPromise = supa.auth.signOut()
+      await Promise.race([
+        signOutPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('signout-timeout')), 6000)),
+      ])
+    } catch {
+      // Fallback: clear local tokens to force logout state
+      if (storageKey) try { localStorage.removeItem(storageKey) } catch {}
+      try { localStorage.removeItem('sb-user') } catch {}
+    } finally {
+      setAuthed(false)
+      setSigningOut(false)
+      // Hard refresh to ensure all client state resets
+      window.location.href = '/'
+    }
   }
 
   return (
