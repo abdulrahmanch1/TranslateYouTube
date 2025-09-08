@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { getSupabase } from '@/lib/supabaseClient'
 import { toSRT, toVTT } from '@/lib/srt'
 import { User } from '@supabase/supabase-js'
@@ -100,10 +101,13 @@ export default function Home() {
   async function onUpload(e: React.FormEvent) {
     e.preventDefault()
     setError(undefined)
+    setBillingWarning(undefined)
     setText('')
     setCues(null)
     setSuggestions([])
     setSuggestTried(false)
+    setCharged(false)
+    if (!user) { setError('Please login to process files'); return }
 
     if (!file) { setError('Choose a file first'); return }
 
@@ -252,28 +256,40 @@ export default function Home() {
         <div className="mt-10 grid md:grid-cols-2 gap-6">
           <form onSubmit={onUpload} className="glass rounded-2xl p-6">
             <label className="block text-sm text-white/70">YouTube file (SRT/VTT/MP3/MP4/WAV)</label>
-            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>{setFile(e.target.files?.[0]||null); setCharged(false); setBillingWarning(undefined)}} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3" />
+            <input type="file" accept=".srt,.vtt,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg,.webm,.mov,.avi,.mkv,.txt" onChange={e=>{setFile(e.target.files?.[0]||null); setCharged(false); setBillingWarning(undefined)}} className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3 disabled:opacity-60" disabled={!user} title={!user ? 'Login required' : undefined} />
             <button
-              disabled={loading || !file}
+              disabled={loading || !file || !user}
               className="mt-4 rounded-lg bg-primary-500 hover:bg-primary-400 px-4 py-2 disabled:opacity-60"
             >
-              { loading ? 'Processing…' : (!file ? 'Choose a file' : (charged ? 'Re-process' : 'Process ($1)')) }
+              { !user ? 'Login to process' : (loading ? 'Processing…' : (!file ? 'Choose a file' : (charged ? 'Re-process' : 'Process ($1)'))) }
             </button>
             {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
             <p className="mt-2 text-xs text-white/50">Balance is charged once per file. Use Wallet to top‑up.</p>
             {billingWarning && <p className="mt-2 text-xs text-white/60">{billingWarning}</p>}
+            {!user && (
+              <div className="mt-4 flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-sm text-white/70">Please login to upload and edit files.</span>
+                <Link href="/login" className="text-ink bg-white rounded-lg px-3 py-1.5 hover:bg-white/90">Login</Link>
+              </div>
+            )}
           </form>
 
           <div className="glass rounded-2xl p-6">
             <div className="text-sm text-white/70 mb-2">Current transcript</div>
-            <textarea ref={taRef} rows={16} value={text} onChange={e=>setText(e.target.value)} className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2" placeholder="Transcript will appear here after processing…" />
+            <textarea ref={taRef} rows={16} value={text} onChange={e=>setText(e.target.value)} className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2" placeholder="Transcript will appear here after processing…" readOnly={!user} />
             <div className="mt-4 flex gap-2">
-              <button onClick={getSuggestions} disabled={loading || !text} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5">Get suggestions</button>
-              <button onClick={()=>download('srt')} disabled={!text} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5">Download SRT</button>
-              <button onClick={()=>download('vtt')} disabled={!text} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5">Download VTT</button>
+              <button onClick={getSuggestions} disabled={loading || !text || !user} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5 disabled:opacity-60">Get suggestions</button>
+              <button onClick={()=>download('srt')} disabled={!text || !user} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5 disabled:opacity-60">Download SRT</button>
+              <button onClick={()=>download('vtt')} disabled={!text || !user} className="rounded-lg border border-white/20 px-4 py-2 hover:bg-white/5 disabled:opacity-60">Download VTT</button>
             </div>
             {suggestTried && suggestions.length === 0 && !error && (
               <p className="mt-3 text-sm text-white/60">No obvious suggestions for this text. For deeper edits enable OPENAI_API_KEY, or try text with common mistakes.</p>
+            )}
+            {!user && (
+              <div className="mt-4 flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-sm text-white/70">Sign in to edit and download.</span>
+                <Link href="/login" className="text-ink bg-white rounded-lg px-3 py-1.5 hover:bg-white/90">Login</Link>
+              </div>
             )}
           </div>
         </div>
